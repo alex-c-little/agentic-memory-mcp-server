@@ -1,0 +1,22 @@
+command: ["uv", "run", "custom-mcp-server"]
+env:
+  # ---- Classic-stable deployment (legacy Lakebase project path) ----
+  - name: LAKEBASE_HOST
+    value: "ep-empty-scene-d2su0mva.database.us-east-1.cloud.databricks.com"
+  - name: LAKEBASE_DATABASE
+    value: "agent_memory"
+  - name: LAKEBASE_PORT
+    value: "5432"
+  - name: LAKEBASE_ENDPOINT_PATH
+    value: "projects/agent-memory/branches/production/endpoints/primary"
+  # ---- For lakebase-sp-test deployment (new Lakebase instance API) ----
+  # Comment out LAKEBASE_ENDPOINT_PATH above and uncomment the two lines below:
+  # - name: LAKEBASE_HOST
+  #   value: "ep-aged-leaf-d2epqpn8.database.us-east-1.cloud.databricks.com"
+  # - name: LAKEBASE_INSTANCE_NAME
+  #   value: "agent-memory-instance"
+  # ---- Model endpoints ----
+  - name: LLM_ENDPOINT
+    value: "databricks-claude-sonnet-4-6"
+  - name: EMBEDDING_ENDPOINT
+    value: "databricks-gte-large-en"

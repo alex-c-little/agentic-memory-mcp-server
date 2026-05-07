@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Memory Server</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1b2838 0%, #2d4059 100%);
+            color: #e0e6ed;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        .subtitle {
+            font-size: 1rem;
+            color: #8899aa;
+            margin-bottom: 32px;
+        }
+        .card {
+            background: rgba(255,255,255,0.07);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            font-size: 1.1rem;
+            color: #6cb4ee;
+            margin-bottom: 16px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        th { color: #8899aa; font-weight: 500; font-size: 0.85rem; }
+        td { color: #e0e6ed; font-size: 0.95rem; }
+        .mono {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            background: rgba(255,255,255,0.06);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .code-block {
+            background: #0d1117;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: #c9d1d9;
+        }
+        .code-block .comment { color: #8b949e; }
+        .code-block .string { color: #a5d6ff; }
+        .code-block .keyword { color: #ff7b72; }
+        .tools-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .tool-item {
+            background: rgba(255,255,255,0.04);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .tool-name {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            color: #6cb4ee;
+            font-size: 0.9rem;
+            margin-bottom: 4px;
+        }
+        .tool-desc {
+            color: #8899aa;
+            font-size: 0.8rem;
+        }
+        .badge {
+            display: inline-block;
+            background: #238636;
+            color: #fff;
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+        .url-highlight {
+            color: #6cb4ee;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MCP Memory Server</h1>
+        <p class="subtitle">Agent long-term memory backed by Lakebase + pgvector</p>
+
+        <div class="card">
+            <h2>Connect via Unity Catalog Connection</h2>
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Connection type</td>
+                    <td><span class="mono">HTTP</span></td>
+                </tr>
+                <tr>
+                    <td>Host</td>
+                    <td><span class="mono url-highlight" id="host-url"></span></td>
+                </tr>
+                <tr>
+                    <td>Port</td>
+                    <td><span class="mono">443</span></td>
+                </tr>
+                <tr>
+                    <td>Base path</td>
+                    <td><span class="mono">/mcp</span></td>
+                </tr>
+                <tr>
+                    <td>Is MCP connection</td>
+                    <td>Checked</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Connect Programmatically</h2>
+            <pre class="code-block"><span class="keyword">from</span> databricks.sdk <span class="keyword">import</span> WorkspaceClient
+<span class="keyword">from</span> databricks_mcp <span class="keyword">import</span> DatabricksMCPClient
+
+<span class="comment"># Initialize the Databricks Workspace client</span>
+ws_client = WorkspaceClient(
+    host=<span class="string">"databricks-host"</span>,
+    token=<span class="string">"exactly-scoped-OAuth-token"</span>,
+)
+
+<span class="comment"># Initialize the MCP client with your app's MCP endpoint</span>
+mcp_client = DatabricksMCPClient(
+    server_url=<span class="string">'<span id="mcp-url"></span>'</span>,
+    workspace_client=ws_client,
+)
+
+<span class="comment"># List available MCP tools</span>
+print(mcp_client.list_tools())</pre>
+        </div>
+
+        <div class="card">
+            <h2>Available Tools</h2>
+            <div class="tools-grid">
+                <div class="tool-item">
+                    <div class="tool-name">retrieve_memory</div>
+                    <div class="tool-desc">Hybrid retrieval (similarity + recency + importance) with near-duplicate suppression and recency tiebreak. Auto-resolves user identity. Includes trust guidance.</div>
+                </div>
+                <div class="tool-item">
+                    <div class="tool-name">store_memory</div>
+                    <div class="tool-desc">Extract, classify (5 types), score, PII redact, embed, and deduplicate memories from conversation text.</div>
+                </div>
+                <div class="tool-item">
+                    <div class="tool-name">list_memories</div>
+                    <div class="tool-desc">Browse stored memories for a user. Filter by type (fact / preference / experience / skill / relationship). Optional include_pruned flag for audit views.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Two Retrieval Modes — With or Without <span class="mono">agent_context</span></h2>
+            <p style="margin-bottom: 12px;">
+                <span class="mono">retrieve_memory</span> accepts an optional
+                <span class="mono">agent_context</span> string. When provided, the server
+                makes one batched LLM call to score how relevant each retrieved memory is to
+                the calling agent's task, and uses that score in the hybrid ranking.
+                When omitted, the stored general importance (set at write time) is used —
+                identical to legacy behavior.
+            </p>
+
+            <table style="margin-bottom: 16px;">
+                <tr>
+                    <th>Mode</th>
+                    <th>How importance is determined</th>
+                    <th>Cost per retrieval</th>
+                </tr>
+                <tr>
+                    <td><span class="mono">agent_context</span> empty</td>
+                    <td>Stored general importance (write-time, agent-blind)</td>
+                    <td>0 LLM calls</td>
+                </tr>
+                <tr>
+                    <td><span class="mono">agent_context</span> provided</td>
+                    <td>LLM-scored against the agent's task; cached per <span class="mono">(agent_context, memory_id)</span></td>
+                    <td>1 LLM call on first retrieval per agent; 0 on cached repeats</td>
+                </tr>
+            </table>
+
+            <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Why pass <span class="mono">agent_context</span>?</h3>
+            <p style="margin-bottom: 12px;">
+                Two memories can share the same <span class="mono">memory_type</span> but matter very
+                differently to different agents. A <span class="mono">relationship</span> memory about the
+                user's manager is highly relevant to an overtime-routing agent; one about a family member
+                is not. Type-level importance can't tell them apart — task-aware scoring can.
+            </p>
+
+            <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Recommended agent prompt pattern</h3>
+            <p style="margin-bottom: 8px;">
+                Add an <em>AGENT CONTEXT</em> block near the top of your agent's system prompt. Tell the
+                agent to pass that string verbatim as <span class="mono">agent_context</span> on every
+                <span class="mono">retrieve_memory</span> call. Be explicit about what's relevant and what
+                isn't — the LLM uses this to discriminate within memory types.
+            </p>
+            <pre class="code-block"><span class="comment"># Excerpt from your agent's system prompt</span>
+
+<span class="keyword">AGENT CONTEXT</span> (pass this verbatim as the <span class="mono">agent_context</span> argument
+on every <span class="mono">retrieve_memory</span> call):
+
+<span class="string">"Overtime assignment and crew routing assistant for utility supervisors.
+Highly relevant: the user's role, region, crew/team assignments, manager,
+direct reports, shift and overtime preferences, and policies they have
+previously asked about. Less relevant: family, hobbies, or unrelated
+personal interests."</span>
+
+<span class="keyword">MEMORY RULES</span>:
+- EVERY conversation: Call <span class="mono">retrieve_memory</span> with the user's name as
+  <span class="mono">user_id</span>, their first message as <span class="mono">query</span>, AND
+  the AGENT CONTEXT string above — BEFORE answering anything.</pre>
+
+            <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Tips for writing a good <span class="mono">agent_context</span></h3>
+            <ul style="margin-bottom: 8px; padding-left: 20px;">
+                <li><strong>Name the agent's task.</strong> "Overtime routing assistant" beats "general assistant."</li>
+                <li><strong>Call out what's relevant <em>and</em> irrelevant.</strong> Both directions help the scorer discriminate within a memory type.</li>
+                <li><strong>Keep it stable.</strong> The cache key is the exact <span class="mono">agent_context</span> string — minor wording changes invalidate the cache.</li>
+                <li><strong>Don't smuggle the user query into context.</strong> Context describes the agent; the <span class="mono">query</span> argument describes the question.</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Features</h2>
+            <table>
+                <tr><td>User identity</td><td>Auto-resolved from authenticated session (falls back to user_id parameter)</td></tr>
+                <tr><td>Memory types</td><td>fact, preference, experience, skill, relationship</td></tr>
+                <tr><td>PII redaction</td><td>Regex-based (phone, email, SSN, credit card)</td></tr>
+                <tr><td>Deduplication</td><td>Cosine similarity threshold (0.92)</td></tr>
+                <tr><td>Retrieval</td><td>Hybrid scoring: 50% similarity + 20% recency + 30% importance, with near-duplicate suppression and recency tiebreak</td></tr>
+                <tr><td>Soft delete</td><td>pruned_at column; retrieval filters out pruned rows. Background pruning job runs weekly.</td></tr>
+                <tr><td>Trust guidance</td><td>Every retrieval includes a trust note for the calling agent</td></tr>
+                <tr><td>Backend</td><td>Lakebase (serverless Postgres) + pgvector with HNSW index</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const appUrl = window.location.origin;
+        document.getElementById('host-url').textContent = appUrl;
+        document.getElementById('mcp-url').textContent = appUrl + '/mcp';
+    </script>
+</body>
+</html>

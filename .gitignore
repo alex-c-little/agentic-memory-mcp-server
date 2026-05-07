@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.databricks/
+.DS_Store
+*.zip
+*.zip.txt

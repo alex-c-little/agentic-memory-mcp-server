@@ -170,9 +170,15 @@ def _resolve_user_id(user_id_param: str = None) -> str:
     This ensures consistent user_id regardless of whether the caller passes a name,
     email, or nothing — and works for both Databricks-hosted and external agents.
     """
-    # Try to get identity from request headers (Databricks Apps flow)
+    # Resolution order:
+    #   1. Forwarded OBO token  →  resolve to email via WorkspaceClient
+    #   2. Direct identity headers some proxies forward (no SDK round-trip needed)
+    #   3. user_id parameter passed by the agent
+    #   4. "unknown"
+    import sys
     try:
         headers = header_store.get({})
+        # 1. Forwarded OBO token from Databricks Apps user-on-behalf-of flow
         token = headers.get("x-forwarded-access-token")
         if token:
             from databricks.sdk import WorkspaceClient
@@ -180,8 +186,19 @@ def _resolve_user_id(user_id_param: str = None) -> str:
             me = w.current_user.me()
             if me and me.user_name:
                 return me.user_name
-    except Exception:
-        pass  # Fall through to parameter-based ID
+        # 2. Direct identity headers (some platforms forward these without an OBO token)
+        for h in (
+            "x-databricks-user-email",
+            "x-forwarded-email",
+            "x-forwarded-user",
+            "x-user-email",
+        ):
+            v = headers.get(h)
+            if v:
+                return v
+    except Exception as e:
+        # Surface unexpected failures to logs rather than swallowing silently.
+        print(f"[_resolve_user_id] header path raised: {e!r}", file=sys.stderr, flush=True)
 
     # Fall back to the passed user_id (for external agents, Foundry, etc.)
     if user_id_param and user_id_param.strip():

@@ -1,15 +1,15 @@
 command: ["uv", "run", "custom-mcp-server"]
 env:
-  # ---- fe-vm-agentic-memory-test deployment (new Lakebase instance API) ----
+  # ---- Lakebase target (edit for your environment) ----
   - name: LAKEBASE_HOST
-    value: "ep-morning-truth-d25saa98.database.us-east-1.cloud.databricks.com"
+    value: "<your-instance>.database.<region>.cloud.databricks.com"
   - name: LAKEBASE_DATABASE
     value: "agent_memory"
   - name: LAKEBASE_PORT
     value: "5432"
   - name: LAKEBASE_INSTANCE_NAME
-    value: "agent-memory-instance"
-  # ---- Model endpoints ----
+    value: "<your-instance-name>"
+  # ---- Model endpoints (these defaults work in any workspace with FMAPI) ----
   - name: LLM_ENDPOINT
     value: "databricks-claude-sonnet-4-6"
   - name: EMBEDDING_ENDPOINT

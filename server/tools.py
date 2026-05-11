@@ -159,34 +159,62 @@ def _cosine_sim(a, b):
     return dot / (na * nb)
 
 
+_SP_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _looks_like_user_identity(s: str) -> bool:
+    """Return True only if `s` looks like a real user identity (email).
+
+    Filters out SP identifiers, which take several forms in Databricks:
+      - Bare UUID  (e.g. db641e38-92be-...)
+      - <principal_id>@<workspace_id>  (e.g. 77574687475448@7474644382705242)
+    Real users look like `<local>@<domain>.<tld>` with non-numeric local part.
+    """
+    if not s or "@" not in s:
+        return False
+    if _SP_UUID_RE.match(s):
+        return False
+    local, _, domain = s.partition("@")
+    if not local or not domain or "." not in domain:
+        # SPs in the principal@workspace format have no dot in domain.
+        return False
+    # SPs in numeric form: local part is all digits.
+    if local.isdigit():
+        return False
+    return True
+
+
 def _resolve_user_id(user_id_param: str = None) -> str:
     """Resolve the user's identity.
 
-    Priority:
-    1. Extract email from the forwarded auth headers (Databricks Apps on-behalf-of-user)
-    2. Fall back to the user_id parameter passed by the calling agent
-    3. Default to 'unknown' if neither is available
+    Resolution order:
+      1. Forwarded OBO token → resolve to email via WorkspaceClient
+         (skipped if the resolved identity is a service principal UUID — that
+         happens under M2M auth where the SP is the caller, not a human).
+      2. Direct identity headers some platforms forward (e.g. x-forwarded-email).
+      3. user_id parameter passed by the agent.
+      4. "unknown".
 
-    This ensures consistent user_id regardless of whether the caller passes a name,
-    email, or nothing — and works for both Databricks-hosted and external agents.
+    This handles three call patterns:
+      - User-on-behalf-of (Apps OBO, U2M UC Connection): header resolves to the
+        real user's email.
+      - M2M UC Connection: header resolves to an SP UUID; we skip it and use
+        the user_id the agent passed.
+      - External agents with no Databricks-injected headers: use user_id_param.
     """
-    # Resolution order:
-    #   1. Forwarded OBO token  →  resolve to email via WorkspaceClient
-    #   2. Direct identity headers some proxies forward (no SDK round-trip needed)
-    #   3. user_id parameter passed by the agent
-    #   4. "unknown"
     import sys
     try:
         headers = header_store.get({})
-        # 1. Forwarded OBO token from Databricks Apps user-on-behalf-of flow
+        # 1. Forwarded OBO token from Databricks Apps user-on-behalf-of flow.
         token = headers.get("x-forwarded-access-token")
         if token:
             from databricks.sdk import WorkspaceClient
             w = WorkspaceClient(token=token, auth_type="pat")
             me = w.current_user.me()
-            if me and me.user_name:
+            if me and me.user_name and _looks_like_user_identity(me.user_name):
                 return me.user_name
-        # 2. Direct identity headers (some platforms forward these without an OBO token)
+            # Otherwise: SP authenticated (M2M); fall through to the agent-passed user_id.
+        # 2. Direct identity headers (some platforms forward these without an OBO token).
         for h in (
             "x-databricks-user-email",
             "x-forwarded-email",
@@ -194,7 +222,7 @@ def _resolve_user_id(user_id_param: str = None) -> str:
             "x-user-email",
         ):
             v = headers.get(h)
-            if v:
+            if v and _looks_like_user_identity(v):
                 return v
     except Exception as e:
         # Surface unexpected failures to logs rather than swallowing silently.

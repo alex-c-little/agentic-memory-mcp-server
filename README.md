@@ -172,45 +172,102 @@ databricks apps get mcp-memory-server-v2 --output json | jq .service_principal_c
 
 ### Step 5 — Grant the app's service principal database access
 
-The app's SP needs to read and write `memory_store`. As the database owner:
+The app's service principal needs to authenticate against Postgres. This is done via the **Lakebase project UI**, not raw SQL — Lakebase manages the OAuth-to-Postgres-role mapping for you.
 
-```sql
--- Replace <APP_SP_CLIENT_ID> with the value from Step 4.
-GRANT CONNECT ON DATABASE agent_memory TO "<APP_SP_CLIENT_ID>";
-GRANT USAGE ON SCHEMA public TO "<APP_SP_CLIENT_ID>";
-GRANT SELECT, INSERT, UPDATE ON memory_store TO "<APP_SP_CLIENT_ID>";
-GRANT USAGE, SELECT ON SEQUENCE memory_store_id_seq TO "<APP_SP_CLIENT_ID>";
-```
+1. Open the Lakebase instance: **Compute → Database instances → `agent-memory-instance`**.
+2. Click into the branch: **Branches → production**.
+3. Open the **Roles & Databases** tab.
+4. Click **Add role**.
+5. Search for and select the app's service principal (by display name, e.g. `app-XXXX mcp-memory-server-v2`).
+6. Auth type: **OAuth**.
+7. System role: **databricks_writer** (minimum) or **databricks_superuser** (broader access if needed).
+8. Save.
 
-### Step 6 — Create the UC Connection with M2M OAuth
+Lakebase creates a Postgres role with the SP's identifier as the role name, and registers the OAuth-token subject mapping required for the app to authenticate. This is the step that lets the app's `database.generate_database_credential` token actually work — manual `CREATE ROLE` via raw SQL doesn't create the mapping.
 
-Agents reach the MCP server through a Unity Catalog HTTP connection authenticated with OAuth client credentials.
+> **Common failure:** If you skip this step, the app logs will show repeated `password authentication failed for user '<sp-uuid>'` errors and connection pool timeouts after 30 seconds.
 
-**6a. Create or identify a service principal.** This SP authenticates the UC Connection itself (it's separate from the app's auto-generated SP). Recommended name: `sp-mcp-memory-bridge`.
+### Step 6 — Choose your UC Connection auth type
 
-**6b. Generate OAuth credentials for that SP** (workspace admin → Settings → Identity → Service principals → your SP → Generate secret). Record the `client_id` and `client_secret`.
+Agents reach the MCP server through a Unity Catalog HTTP connection. There are two supported auth flavors — pick based on what you have access to and what user-identity guarantees you need.
 
-**6c. Grant the SP "Can Use" permission on the app** (Apps UI → `mcp-memory-server-v2` → Permissions → add the SP).
+| Flavor | Setup gates | User identity reaching the MCP server |
+|---|---|---|
+| **OAuth User-to-Machine (U2M)** | Account admin must register a custom OAuth app in the **account console**. Each user does a one-time browser consent. | The **real calling user's** identity is forwarded automatically. `user_id` does not need to be passed by the agent. |
+| **OAuth Machine-to-Machine (M2M)** | Workspace admin creates a service principal and generates an OAuth secret. No account console access needed. | The **service principal's** identity is what reaches the MCP server. The agent **must explicitly pass `user_id`** in every tool call for memories to be siloed per user. |
 
-**6d. Create the connection** (Catalog Explorer → External Connections → Create):
+If you have account admin available, U2M is the cleaner long-term setup. If not (the most common situation for a workspace-admin-only setup), M2M with explicit `user_id` works fully — the server includes logic to detect SP-shaped identities in the OBO header and fall through to the agent-passed `user_id`.
+
+### Step 6a — Path A: M2M OAuth Connection (workspace-admin friendly)
+
+1. **Create a workspace service principal.** Settings → Identity and access → Service principals → Add. Name it something descriptive, e.g. `sp-mcp-memory-bridge`.
+2. **Generate an OAuth secret on the SP.** Click into the SP → Secrets (or "OAuth secrets") → Generate. Copy the **Client ID** and **Secret** — the secret is shown only once.
+3. **Grant the SP "Can Use" on the app.** Compute → Apps → `mcp-memory-server-v2` → Permissions → add the SP.
+4. **Create the connection.** Catalog Explorer → External Connections → Create with these values:
 
 | Field | Value |
 |---|---|
 | Connection type | HTTP |
-| Authentication | OAuth Client Credentials |
-| OAuth client ID | the SP's `client_id` from 6b |
-| OAuth client secret | the SP's `client_secret` from 6b |
+| Authentication | **OAuth Machine-to-Machine** |
+| OAuth client ID | the SP's `client_id` from step 2 |
+| OAuth client secret | the SP's `client_secret` from step 2 |
 | Token endpoint | `https://<your-workspace-host>/oidc/v1/token` |
-| Host | `https://mcp-memory-server-v2-<workspace-id>.<region>.databricksapps.com` (from the Apps UI) |
+| OAuth scope | `all-apis` |
+| Host | the app URL (from the Apps UI; ends in `.databricksapps.com`) |
 | Port | `443` |
 | Base path | `/mcp` |
 | Is MCP connection | checked |
 
-OAuth client credentials let the proxy refresh tokens automatically — no rotation script required.
+**Agent prompt requirement under M2M:** the agent's system prompt must instruct it to always pass `user_id` in tool calls. Without it, all memories collide under `resolved_user_id = "unknown"`. See the agent prompt patterns in Step 7.
+
+### Step 6b — Path B: U2M OAuth Connection (account-admin required)
+
+1. **An account admin must register a custom OAuth application** in the account console (`https://accounts.cloud.databricks.com` for AWS or `https://accounts.azuredatabricks.net` for Azure). Settings → App Connections → Add custom OAuth integration with these values:
+
+   | Field | Value |
+   |---|---|
+   | Name | e.g. `mcp-memory-connection` |
+   | Redirect URIs | `https://<your-workspace-host>/login/oauth/http.html` |
+   | Confidential client | Yes |
+   | Scopes | `all-apis`, `offline_access` |
+
+   The form returns a `client_id` and `client_secret`. Save both — the secret is shown only once.
+
+2. **Workspace admin creates the connection.** Catalog Explorer → External Connections → Create with these values:
+
+| Field | Value |
+|---|---|
+| Connection type | HTTP |
+| Authentication | **OAuth User-to-Machine** |
+| OAuth provider | Manual configuration |
+| Authorization endpoint | `https://<your-workspace-host>/oidc/v1/authorize` |
+| Token endpoint | `https://<your-workspace-host>/oidc/v1/token` |
+| OAuth client ID | from step 1 |
+| OAuth client secret | from step 1 |
+| OAuth scope | `all-apis offline_access` (the `offline_access` is required for refresh tokens) |
+| Credential exchange method | `header_and_body` |
+| Host | the app URL |
+| Port | `443` |
+| Base path | `/mcp` |
+| Is MCP connection | checked |
+
+3. **First time each user calls the connection from an agent**, they'll be redirected through a browser consent flow. Approve once; their refresh token is stored on the connection. Subsequent calls are transparent.
+
+**Common errors and fixes (U2M):**
+
+| Error | Cause | Fix |
+|---|---|---|
+| `OAuth application with client_id ... not available in Databricks account ...` | The OAuth app was registered in a different account than the one your workspace lives in | Re-register the OAuth app in the account that owns this workspace |
+| `redirect_uri ... not registered for OAuth application ...` | Redirect URI on the OAuth app doesn't match what the UC Connection sends | Update the OAuth app's redirect URI to match exactly (including any trailing `/login/oauth/http.html` path) |
+| Consent flow returns access token but no refresh | `offline_access` scope is missing | Add `offline_access` to the scope on both the OAuth app and the UC Connection |
 
 ### Step 7 — Wire your agent
 
 Two prompt patterns, depending on whether you want task-aware re-ranking. Pick one per agent.
+
+> **Important when using M2M UC Connections:** the agent **must** pass `user_id` explicitly on every memory tool call. The service principal that authenticates the connection carries no user identity, so without `user_id` the server resolves to `"unknown"` and all users' memories collide. Most agent platforms expose the calling user's email via a template variable (e.g. `{{user.email}}`); use it as the `user_id` argument.
+>
+> Under U2M, the user identity is forwarded automatically and `user_id` becomes optional. Passing it is still safe — the server prefers the OBO header's real-user identity over the agent-passed value.
 
 #### Pattern A — Without `agent_context` (simpler)
 
@@ -218,8 +275,13 @@ Two prompt patterns, depending on whether you want task-aware re-ranking. Pick o
 You have access to an MCP MEMORY SERVER for remembering and recalling
 information about the user across sessions.
 
+USER IDENTIFICATION:
+On every memory tool call, pass user_id as the calling user's email.
+Most agent platforms expose this via a template variable
+(e.g. {{user.email}}). Do not invent a generic id like "user".
+
 MEMORY RULES:
-- EVERY conversation: Call retrieve_memory with the user's name as user_id
+- EVERY conversation: Call retrieve_memory with the user's email as user_id
   and their first message as query BEFORE answering anything.
 - When the user shares personal or professional information: Call store_memory
   with user_id and the conversation text.
@@ -240,8 +302,13 @@ user attributes are most relevant AND which are not. The LLM uses this
 to discriminate within memory types — for example, a relationship memory
 about the user's manager versus one about a family member.>"
 
+USER IDENTIFICATION:
+On every memory tool call, pass user_id as the calling user's email.
+Most agent platforms expose this via a template variable
+(e.g. {{user.email}}). Do not invent a generic id like "user".
+
 MEMORY RULES:
-- EVERY conversation: Call retrieve_memory with the user's name as user_id,
+- EVERY conversation: Call retrieve_memory with the user's email as user_id,
   their first message as query, AND the AGENT CONTEXT string above —
   BEFORE answering anything.
 - When the user shares personal or professional information: Call store_memory

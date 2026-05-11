@@ -178,14 +178,53 @@ print(mcp_client.list_tools())</pre>
         </div>
 
         <div class="card">
+            <h2>Memory Rules — Drop Into Your Agent's System Prompt</h2>
+            <p style="margin-bottom: 12px;">
+                Paste this block into your agent's system prompt so it knows when and how to call
+                the memory tools. The most important rule is the <em>user_id</em> source: it must
+                come from session metadata (the calling user's email), <em>not</em> from what the
+                user types in chat.
+            </p>
+            <pre class="code-block">MEMORY RULES (follow these exactly):
+
+USER IDENTIFICATION — most important rule:
+- The user_id you pass to memory tools MUST be the calling user's email
+  address from session metadata (e.g. {{user.email}} if your platform
+  supports template variables, or whatever identity the agent harness
+  exposes for the authenticated caller).
+- Do NOT use the name the user types in chat (e.g. "Alex", "Steve").
+  Names users type are unstable — they may shorten, change spelling,
+  or omit them entirely across sessions.
+- If you genuinely cannot find an authenticated identifier, omit user_id
+  rather than guessing — the server will resolve it from the auth headers
+  (or fall back to "unknown" if it must).
+
+MEMORY TOOL USAGE:
+- EVERY conversation: BEFORE answering the user's first message, call
+  retrieve_memory with their first message as query (and user_id from
+  session metadata).
+- When the user introduces themselves, shares their role, team, region,
+  preferences, or any personal/professional information: call store_memory
+  with the conversation text. Always store durable facts about the user
+  (name, role, team, region, preferences).
+- When the user asks "what do you know about me" or references previous
+  sessions: call retrieve_memory.
+
+RESPONSE RULES:
+- When using retrieved memories: preface with "Based on our previous
+  conversations..."
+- Refer to retrieved memories in your reasoning but do not list them
+  back to the user as raw data unless they ask.</pre>
+        </div>
+
+        <div class="card">
             <h2>Two Retrieval Modes — With or Without <span class="mono">agent_context</span></h2>
             <p style="margin-bottom: 12px;">
                 <span class="mono">retrieve_memory</span> accepts an optional
                 <span class="mono">agent_context</span> string. When provided, the server
                 makes one batched LLM call to score how relevant each retrieved memory is to
                 the calling agent's task, and uses that score in the hybrid ranking.
-                When omitted, the stored general importance (set at write time) is used —
-                identical to legacy behavior.
+                When omitted, the stored general importance (set at write time) is used.
             </p>
 
             <table style="margin-bottom: 16px;">
@@ -208,10 +247,9 @@ print(mcp_client.list_tools())</pre>
 
             <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Why pass <span class="mono">agent_context</span>?</h3>
             <p style="margin-bottom: 12px;">
-                Two memories can share the same <span class="mono">memory_type</span> but matter very
-                differently to different agents. A <span class="mono">relationship</span> memory about the
-                user's manager is highly relevant to an overtime-routing agent; one about a family member
-                is not. Type-level importance can't tell them apart — task-aware scoring can.
+                Two memories can have different importance to different agents. For example, a memory
+                about a user's family member's name holds greater importance to an HR benefits enrollment
+                agent than to an agent guiding a user through installing a transformer.
             </p>
 
             <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Recommended agent prompt pattern</h3>
@@ -221,29 +259,65 @@ print(mcp_client.list_tools())</pre>
                 <span class="mono">retrieve_memory</span> call. Be explicit about what's relevant and what
                 isn't — the LLM uses this to discriminate within memory types.
             </p>
-            <pre class="code-block"><span class="comment"># Excerpt from your agent's system prompt</span>
+            <pre class="code-block">AGENT CONTEXT (pass this verbatim as the agent_context argument
+on every retrieve_memory call):
 
-<span class="keyword">AGENT CONTEXT</span> (pass this verbatim as the <span class="mono">agent_context</span> argument
-on every <span class="mono">retrieve_memory</span> call):
-
-<span class="string">"Overtime assignment and crew routing assistant for utility supervisors.
+"Overtime assignment and crew routing assistant for utility supervisors.
 Highly relevant: the user's role, region, crew/team assignments, manager,
 direct reports, shift and overtime preferences, and policies they have
 previously asked about. Less relevant: family, hobbies, or unrelated
-personal interests."</span>
-
-<span class="keyword">MEMORY RULES</span>:
-- EVERY conversation: Call <span class="mono">retrieve_memory</span> with the user's name as
-  <span class="mono">user_id</span>, their first message as <span class="mono">query</span>, AND
-  the AGENT CONTEXT string above — BEFORE answering anything.</pre>
+personal interests."</pre>
 
             <h3 style="font-size: 1rem; margin-top: 16px; margin-bottom: 8px;">Tips for writing a good <span class="mono">agent_context</span></h3>
             <ul style="margin-bottom: 8px; padding-left: 20px;">
-                <li><strong>Name the agent's task.</strong> "Overtime routing assistant" beats "general assistant."</li>
-                <li><strong>Call out what's relevant <em>and</em> irrelevant.</strong> Both directions help the scorer discriminate within a memory type.</li>
-                <li><strong>Keep it stable.</strong> The cache key is the exact <span class="mono">agent_context</span> string — minor wording changes invalidate the cache.</li>
-                <li><strong>Don't smuggle the user query into context.</strong> Context describes the agent; the <span class="mono">query</span> argument describes the question.</li>
+                <li>Name the agent's task. "Overtime routing assistant" beats "general assistant."</li>
+                <li>Call out what's relevant and irrelevant. Both directions help the scorer discriminate within a memory type.</li>
+                <li>Keep it stable. The cache key is the exact <span class="mono">agent_context</span> string — minor wording changes invalidate the cache.</li>
+                <li>Don't smuggle the user query into context. Context describes the agent; the <span class="mono">query</span> argument describes the question.</li>
             </ul>
+        </div>
+
+        <div class="card">
+            <h2>Memory Types</h2>
+            <p style="margin-bottom: 12px;">
+                On <span class="mono">store_memory</span>, the server extracts atomic memories from the
+                conversation and classifies each into one of five types. Typing prevents false dedup
+                (e.g. "uses Hadoop" as a <span class="mono">fact</span> vs. "wants to move off Hadoop"
+                as a <span class="mono">preference</span> are different memories even though they're
+                semantically similar) and enables type-filtered retrieval via <span class="mono">list_memories</span>.
+            </p>
+            <table>
+                <tr>
+                    <th>Type</th>
+                    <th>What it captures</th>
+                    <th>Examples</th>
+                </tr>
+                <tr>
+                    <td><span class="mono">fact</span></td>
+                    <td>Objective information about the user or their organization</td>
+                    <td>"Works at PPL Corp", "Region is Southeast"</td>
+                </tr>
+                <tr>
+                    <td><span class="mono">preference</span></td>
+                    <td>Stated or implied preferences and habits</td>
+                    <td>"Prefers concise responses", "Always pays crews double time on Fridays"</td>
+                </tr>
+                <tr>
+                    <td><span class="mono">experience</span></td>
+                    <td>Past experiences or current situation</td>
+                    <td>"Demoed Lakebase branching on April 15", "Has been on call for 3 weeks"</td>
+                </tr>
+                <tr>
+                    <td><span class="mono">skill</span></td>
+                    <td>Technical skills, training, or expertise</td>
+                    <td>"Knows Spark Structured Streaming", "Certified in OSHA crane operation"</td>
+                </tr>
+                <tr>
+                    <td><span class="mono">relationship</span></td>
+                    <td>People, teams, or organizational relationships</td>
+                    <td>"Manager is Steve Phillips", "Has a spouse and child"</td>
+                </tr>
+            </table>
         </div>
 
         <div class="card">

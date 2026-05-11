@@ -540,12 +540,16 @@ def load_tools(mcp_server):
         skipped = 0
         extracted = []
 
+        superseded = 0
         for mem in memories:
             content = _redact_pii(mem.get("content", ""))
             memory_type = mem.get("memory_type", "fact")
             importance = mem.get("importance", 0.5)
 
-            # Dedup check
+            # Find the nearest active memory of the same type (active = not pruned).
+            # Restricting by memory_type prevents cross-type collisions —
+            # e.g. a 'fact' shouldn't dedup against a 'preference' just because
+            # their embeddings are close ("uses Hadoop" vs "wants off Hadoop").
             embedding = _get_embeddings([content])[0]
             embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
@@ -555,18 +559,36 @@ def load_tools(mcp_server):
                        1 - (embedding <=> '{embedding_str}'::vector) as similarity
                 FROM memory_store
                 WHERE user_id = %s
+                  AND memory_type = %s
+                  AND pruned_at IS NULL
                 ORDER BY embedding <=> '{embedding_str}'::vector
                 LIMIT 1
                 """,
-                (resolved_id,),
+                (resolved_id, memory_type),
             )
 
-            is_duplicate = False
+            # Three outcomes:
+            #   - identical content already exists  ->  skip (true repeat)
+            #   - near-dup but content differs      ->  soft-delete old, store new
+            #                                          (write-time recency bias,
+            #                                           matches retrieval behavior)
+            #   - no near-dup                       ->  insert
+            status = "stored"
             if rows and rows[0][2] >= SIMILARITY_THRESHOLD:
-                is_duplicate = True
-                skipped += 1
+                existing_id, existing_content, _ = rows[0]
+                if existing_content.strip() == content.strip():
+                    status = "duplicate_skipped"
+                    skipped += 1
+                else:
+                    execute_sql(
+                        "UPDATE memory_store SET pruned_at = NOW() WHERE id = %s",
+                        (existing_id,),
+                        fetch=False,
+                    )
+                    status = "superseded"
+                    superseded += 1
 
-            if not is_duplicate:
+            if status in ("stored", "superseded"):
                 execute_sql(
                     """
                     INSERT INTO memory_store
@@ -582,12 +604,13 @@ def load_tools(mcp_server):
                 "memory_type": memory_type,
                 "content": content,
                 "importance": importance,
-                "status": "duplicate_skipped" if is_duplicate else "stored",
+                "status": status,
             })
 
         return {
             "stored": stored,
             "skipped": skipped,
+            "superseded": superseded,
             "resolved_user_id": resolved_id,
             "memories": extracted,
         }
